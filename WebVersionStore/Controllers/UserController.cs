@@ -1,16 +1,27 @@
 ﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
 using WebVersionStore.Models;
+using WebVersionStore.Models.Local;
 
 namespace WebVersionStore.Controllers
 {
     [Authorize]
     public class UserController : Controller
     {
-        private WebVersionControlContext _database;
-        public UserController(WebVersionControlContext _database) 
+        WebVersionControlContext _database;
+        JwtSettings _jwtSettings;
+        IPasswordHasher<User> _passwordHasher;
+        public UserController(WebVersionControlContext _database, IOptions<JwtSettings> _jwtSettings, IPasswordHasher<User> hasher) 
         {
             this._database = _database;
+            this._jwtSettings = _jwtSettings.Value;
+            this._passwordHasher = hasher;
         }
 
         [HttpGet]
@@ -22,41 +33,44 @@ namespace WebVersionStore.Controllers
         [HttpGet]
         public ActionResult List()
         {
-            return Json(new ResponceModel(
+            return Json(
                 (from user in _database.Users 
                  select new { user.Login })
                 .Take(100).ToList()
-                ));
+                );
         }
 
         [HttpGet]
         public ActionResult Details(string login)
         {
             var res = _database.Users.Find(login);
-            if (res == null) return Json(new ResponceModel("Error", "User not found"));
+            if (res == null) return NotFound();
             return Json(res);
         }
 
         [HttpPost]
-        //[ValidateAntiForgeryToken]
-        public async Task<ActionResult> Create(User user)
+        [AllowAnonymous]
+        public async Task<ActionResult> Create([FromBody]User user)
         {
             if (!ModelState.IsValid)
-                return Json(new ResponceModel("Error", "Missing required value"));
+                return BadRequest();
+
+            user.Password = _passwordHasher.HashPassword(user, user.Password);
 
             _database.Users.Add(user);
 
             if(await _database.SaveChangesAsync() == 0)
-                return Json(new ResponceModel("Error", "Saving failed"));
+                //Something's wrong on server side
+                return StatusCode(500);
 
-            return RedirectToActionPermanent(nameof(Details), user.Login);
+            return Ok();
         }
 
         [HttpPost]
-        //[ValidateAntiForgeryToken]
-        public async Task<ActionResult> Edit(User user)
+        public async Task<ActionResult> Edit([FromBody]User user)
         {
-            /*var inputType = user.GetType();
+            /*  Variation that allows sending partial user data (does not work: using object gives no info about stored data)
+            var inputType = user.GetType();
             if (user == null || inputType.GetProperty("Login") == null)
                 return Json(new { status = "error", message = "Missing user login" });
             var databaseUser = _database.Users.Find(inputType.GetProperty("Login").GetValue(user));
@@ -74,15 +88,14 @@ namespace WebVersionStore.Controllers
             return RedirectToActionPermanent(nameof(Details), inputType.GetProperty("Login").GetValue(user));*/
 
             if (!ModelState.IsValid)
-                return Json(new ResponceModel("Error", "Missing required value"));
+                return BadRequest();
 
             _database.Users.Update(user);
             await _database.SaveChangesAsync();
-            return RedirectToActionPermanent(nameof(Details), new { user.Login });
+            return Ok();
         }
 
         [HttpPost]
-        //[ValidateAntiForgeryToken]
         public async Task<ActionResult> Delete(string login)
         {
             var user = await _database.Users.FindAsync(login);
@@ -91,7 +104,42 @@ namespace WebVersionStore.Controllers
                 _database.Users.Remove(user);
                 await _database.SaveChangesAsync();
             }
-            return Json(new ResponceModel("User deleted"));
+            return Ok();
+        }
+
+        [HttpGet]
+        [AllowAnonymous]
+        public async Task<ActionResult<AuthResponceModel>> Login([FromBody] AuthRequestModel user)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            
+
+            var userData = await _database.Users.FindAsync(user.Login);
+            if (userData == null) 
+                return NotFound();
+
+            var passwordCheck = _passwordHasher.VerifyHashedPassword(userData, userData.Password, user.Password);
+            if (passwordCheck == PasswordVerificationResult.Failed)
+                return NotFound();
+
+            AuthResponceModel responce = new AuthResponceModel(user);
+            var tokenHandler = new JwtSecurityTokenHandler();
+            var tokendata = new SecurityTokenDescriptor
+            {
+                Subject = new ClaimsIdentity(new Claim[]
+                {
+                    new Claim(ClaimTypes.Name, user.Login)
+                }),
+                IssuedAt = DateTime.UtcNow,
+                Expires = DateTime.UtcNow.AddHours(1),
+                SigningCredentials = new SigningCredentials(
+                    new SymmetricSecurityKey(_jwtSettings.SecretBytes),
+                    SecurityAlgorithms.HmacSha256Signature),//TODO swap for smth better
+            };
+            responce.Token = tokenHandler.WriteToken(tokenHandler.CreateToken(tokendata));
+            return responce;
         }
     }
 }

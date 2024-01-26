@@ -4,38 +4,28 @@ using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using WebVersionStore;
 using WebVersionStore.Handlers;
+using WebVersionStore.Models;
+using WebVersionStore.Models.Local;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// The dependencies are defined in DependencyManager.cs 
-builder.Services.AddDefaultDependencies();
+var section = builder.Configuration.GetSection("JwtSettings");
+builder.Services.Configure<JwtSettings>(section);
 
-//TODO Check how the parameter is *actually* used here
-builder.Services.UseCustomHashPasswordBuilder().UseArgon2<WebVersionStore.Models.User>();
+// The dependencies are defined in DependencyManager.cs 
+builder.Services.AddDefaultDependencies(builder.Configuration);
+
+//The Argon2 algotrithm here doesn't use the given type at all!
+//It can technically be any type
+//The User type has been chosen simply because it makes (conceptual) sense.
+builder.Services.UseCustomHashPasswordBuilder().UseArgon2<User>();
 
 builder.Services.AddAuthorization();
-//builder.Services.AddAuthentication("JwsAuthentication")
-//    .AddScheme<AuthenticationSchemeOptions, JwsAuthenticationHandler>("JwsAuthentication", null);
-builder.Services.AddAuthentication("Bearer").AddJwtBearer(options =>
+builder.Services.AddAuthentication(options =>
 {
-    options.Events = new JwtBearerEvents()
-    {
-        OnTokenValidated = context =>
-        {
-            context.ValidateJwtToken();
-            return Task.CompletedTask;
-        }
-    };
-    options.RequireHttpsMetadata = false;
-    options.SaveToken = true;
-    options.TokenValidationParameters = new TokenValidationParameters
-    {
-        ValidateIssuerSigningKey = true,
-        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes("testkeyasdfxzcvzxcv12345678912356465445645564")),
-        ValidateIssuer = false,
-        ValidateAudience = false
-    };
-});
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+}).SetupJwtBearer(builder.Configuration.GetSection("JwtSettings"));
 
 builder.Services.AddControllersWithViews();
 
@@ -54,6 +44,7 @@ app.UseStaticFiles();
 
 app.UseRouting();
 
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllerRoute(
