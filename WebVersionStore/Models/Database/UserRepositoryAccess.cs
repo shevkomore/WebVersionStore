@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 
-namespace WebVersionStore.Models;
+namespace WebVersionStore.Models.Database;
 
 public partial class UserRepositoryAccess
 {
@@ -9,13 +9,13 @@ public partial class UserRepositoryAccess
 
     public Guid RepositoryId { get; set; }
 
-    public bool? CanView { get; set; }
+    public bool CanView { get; set; }
 
-    public bool? CanEdit { get; set; }
+    public bool CanEdit { get; set; }
 
-    public bool? CanAdd { get; set; }
+    public bool CanAdd { get; set; }
 
-    public bool? CanRemove { get; set; }
+    public bool CanRemove { get; set; }
 
     public virtual Repository Repository { get; set; } = null!;
 

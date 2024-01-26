@@ -7,6 +7,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using WebVersionStore.Models;
+using WebVersionStore.Models.Database;
 using WebVersionStore.Models.Local;
 
 namespace WebVersionStore.Controllers

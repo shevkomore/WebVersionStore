@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 
-namespace WebVersionStore.Models;
+namespace WebVersionStore.Models.Database;
 
 public partial class WebVersionControlContext : DbContext
 {
@@ -23,46 +23,49 @@ public partial class WebVersionControlContext : DbContext
 
     public virtual DbSet<Version> Versions { get; set; }
 
-
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+        => optionsBuilder.UseSqlServer("name=WebVersionStoreDatabase");
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Repository>(entity =>
         {
             entity.Property(e => e.RepositoryId).ValueGeneratedNever();
+            entity.Property(e => e.Author).HasMaxLength(100);
             entity.Property(e => e.Description).HasMaxLength(100);
             entity.Property(e => e.Name).HasMaxLength(20);
+
+            entity.HasOne(d => d.AuthorNavigation).WithMany(p => p.Repositories)
+                .HasForeignKey(d => d.Author)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_Repositories_Users");
         });
 
         modelBuilder.Entity<User>(entity =>
         {
             entity.HasKey(e => e.Login);
 
-            entity.Property(e => e.Login).HasMaxLength(40);
+            entity.Property(e => e.Login).HasMaxLength(100);
             entity.Property(e => e.Password).HasMaxLength(100);
-            entity.Property(e => e.Username).HasMaxLength(20);
+            entity.Property(e => e.Username).HasMaxLength(100);
         });
 
         modelBuilder.Entity<UserRepositoryAccess>(entity =>
         {
-            entity
-                .HasNoKey()
-                .ToTable("UserRepositoryAccess");
+            entity.HasKey(e => new { e.UserLogin, e.RepositoryId }).HasName("PK__UserRepo__7415253E7FA5C71D");
+
+            entity.ToTable("UserRepositoryAccess");
 
             entity.HasIndex(e => new { e.UserLogin, e.RepositoryId }, "IX_UserRepositoryAccess");
 
-            entity.Property(e => e.CanAdd).HasDefaultValueSql("((0))");
-            entity.Property(e => e.CanEdit).HasDefaultValueSql("((0))");
-            entity.Property(e => e.CanRemove).HasDefaultValueSql("((0))");
-            entity.Property(e => e.CanView).HasDefaultValueSql("((0))");
-            entity.Property(e => e.UserLogin).HasMaxLength(40);
+            entity.Property(e => e.UserLogin).HasMaxLength(100);
 
-            entity.HasOne(d => d.Repository).WithMany()
+            entity.HasOne(d => d.Repository).WithMany(p => p.UserRepositoryAccesses)
                 .HasForeignKey(d => d.RepositoryId)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_UserRepositoryAccess_Repositories");
 
-            entity.HasOne(d => d.UserLoginNavigation).WithMany()
+            entity.HasOne(d => d.UserLoginNavigation).WithMany(p => p.UserRepositoryAccesses)
                 .HasForeignKey(d => d.UserLogin)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_UserRepositoryAccess_Users");

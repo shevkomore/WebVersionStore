@@ -5,6 +5,7 @@ using System.Text;
 using WebVersionStore;
 using WebVersionStore.Handlers;
 using WebVersionStore.Models;
+using WebVersionStore.Models.Database;
 using WebVersionStore.Models.Local;
 
 var builder = WebApplication.CreateBuilder(args);

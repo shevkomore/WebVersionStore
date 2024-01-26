@@ -6,6 +6,7 @@ using Microsoft.IdentityModel.Protocols;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using WebVersionStore.Models;
+using WebVersionStore.Models.Database;
 using WebVersionStore.Models.Local;
 using static System.Runtime.InteropServices.JavaScript.JSType;
 

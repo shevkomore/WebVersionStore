@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 
-namespace WebVersionStore.Models;
+namespace WebVersionStore.Models.Database;
 
 public partial class Version
 {
