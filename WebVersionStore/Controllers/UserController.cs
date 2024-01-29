@@ -44,6 +44,12 @@ namespace WebVersionStore.Controllers
         [HttpGet]
         public ActionResult Details(string login)
         {
+            if(login == null || login.Trim() == "") 
+            {
+                if (HttpContext.User.Identity?.Name == null)
+                    return BadRequest();
+                login = HttpContext.User.Identity.Name;
+            }
             var res = _database.Users.Find(login);
             if (res == null) return NotFound();
             return Json(res);
