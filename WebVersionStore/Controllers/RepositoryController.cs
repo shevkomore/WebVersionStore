@@ -16,18 +16,18 @@ namespace WebVersionStore.Controllers
             _database = database;
         }
         //Non-specific requests, and non-action methods (private/with NonActionAttribute)
-        #region Generic
+        #region General
         [HttpGet]
         public ActionResult Index() => RedirectToActionPermanent(nameof(List));
 
-        Repository? FindRepository(Guid repositoryId)
+        ValueTask<Repository?> FindRepository(Guid repositoryId)
         {
-            return _database.Repositories.Find(repositoryId);
+            return _database.Repositories.FindAsync(repositoryId);
         }
-        Repository? FindRepository(Guid repositoryId, RepositoryAccessLevel level, IIdentity? user)
+        async Task<Repository?> FindRepository(Guid repositoryId, RepositoryAccessLevel level, IIdentity? user)
         {
             if (user == null) return null;
-            var repository = FindRepository(repositoryId);
+            var repository = await FindRepository(repositoryId);
             if (repository == null) return null;
             if (!user.CanAccess(repository, level)) return null;
             return repository;
@@ -38,7 +38,7 @@ namespace WebVersionStore.Controllers
         [HttpGet]
         public ActionResult List()
         {
-            if (HttpContext.User.Identity == null)
+            if (HttpContext.User.Identity?.Name == null)
                 return BadRequest();
 
             var list = from repo in _database.Repositories
@@ -57,7 +57,7 @@ namespace WebVersionStore.Controllers
         [HttpGet]
         public ActionResult ListOwned()
         {
-            if (HttpContext.User.Identity == null)
+            if (HttpContext.User.Identity?.Name == null)
                 return BadRequest();
 
             var list = from repo in _database.Repositories
@@ -69,7 +69,7 @@ namespace WebVersionStore.Controllers
         [HttpGet]
         public ActionResult ListAccess(RepositoryAccessSettingsModel accessSettings)
         {
-            if (HttpContext.User.Identity == null)
+            if (HttpContext.User.Identity?.Name == null)
                 return BadRequest();
 
             var list = from repo in _database.Repositories
@@ -96,45 +96,127 @@ namespace WebVersionStore.Controllers
             return Json(list.ToList());
         }
         #endregion
-        //Requests regarding a specific repository. Generally call FindRepository (in General)
+        //Requests regarding a specific repository. Usually call FindRepository (in General)
         #region Repository
         [HttpGet]
-        public ActionResult Details(Guid repositoryId)
+        public async Task<ActionResult> Details(Guid repositoryId)
         {
-            var repository = FindRepository(repositoryId, RepositoryAccessLevel.VIEW, HttpContext.User.Identity);
+            var repository = await FindRepository(repositoryId, RepositoryAccessLevel.VIEW, HttpContext.User.Identity);
             if (repository == null) return NotFound();
-            throw new NotImplementedException();
-
+            //The version tree is also sent here
+            //TODO? prepare tree data here for simpler visualization (sort by heredity, maybe construct the tree etc.)
+            var tree = repository.Versions.ToList();
+            return Json(new {info = repository, tree = tree });
         }
 
         [HttpPost]
-        public ActionResult Create(RepositoryDisplaySettingsModel model)
+        public async Task<ActionResult> Create(RepositoryDisplaySettingsModel model)
         {
-            throw new NotImplementedException();
+            if (HttpContext.User.Identity?.Name == null)
+                return BadRequest();
+            if (_database.Users.Find(HttpContext.User.Identity) == null)
+                return NotFound("User not found");
+
+            _database.Repositories.Add(new Repository
+            {
+                Author = HttpContext.User.Identity.Name!,
+                Name = model.Name,
+                Description = model.Description,
+            });
+
+            if (await _database.SaveChangesAsync() == 0)
+                return StatusCode(500);
+
+            return Ok();
         }
 
         [HttpPost]
-        public ActionResult Edit(Guid repositoryId, RepositoryDisplaySettingsModel model)
+        public async Task<ActionResult> Edit(Guid repositoryId, RepositoryDisplaySettingsModel model)
         {
-            var repository = FindRepository(repositoryId, RepositoryAccessLevel.EDIT, HttpContext.User.Identity);
+            var repository = await FindRepository(repositoryId, RepositoryAccessLevel.EDIT, HttpContext.User.Identity);
             if (repository == null) return NotFound();
-            throw new NotImplementedException();
+
+            model.Apply(repository);
+
+            await _database.SaveChangesAsync();
+
+            return Ok();
         }
 
         [HttpPost]
-        public ActionResult GrantAccess(Guid repositoryId, RepositoryAccessLevel type) 
+        public async Task<ActionResult> GrantAccess(Guid repositoryId, string target, RepositoryAccessLevel level) 
         {
-            var repository = FindRepository(repositoryId, RepositoryAccessLevel.EDIT, HttpContext.User.Identity);
+            /* Explanation:
+             *  There are three considered access levels:
+             *      Author
+             *        Edit-level users
+             *          Other users
+             *  Other users cannot change access
+             *  Each given level can grant access UP TO their level 
+             *      (NOT inclusive; i.e. Edit-level cannot grant CanEdit access)
+             *  User cannot grant access to themselves 
+             *      (it's generally unnecessary; it's checked here just in case something else made a mistake)
+             */
+            var repository = await FindRepository(repositoryId, RepositoryAccessLevel.EDIT, HttpContext.User.Identity);
             if (repository == null) return NotFound();
-            throw new NotImplementedException();
+
+            if (target == HttpContext.User.Identity?.Name)
+                return BadRequest("User cannot grant access to themselves");
+            if (target == repository.Author)
+                return Ok("Author does not require access level assignment");
+            if (level == RepositoryAccessLevel.EDIT)
+            {
+                var source = await _database.Users.FindAsync(HttpContext.User.Identity);
+                if (source == null || repository.Author != source.Login)
+                    return Unauthorized("At least Author access level is required to grant EDIT access");
+            }
+            var targetAccess = await _database.UserRepositoryAccesses.FindAsync(repositoryId, target);
+            if (targetAccess == null) targetAccess = new UserRepositoryAccess{
+                    RepositoryId = repositoryId,
+                    UserLogin = target
+                };
+            level.Grant(targetAccess);
+            _database.UserRepositoryAccesses.Add(targetAccess);
+            await _database.SaveChangesAsync();
+            return Ok();
         }
 
         [HttpPost]
-        public ActionResult RevokeAccess(Guid repositoryId, RepositoryAccessLevel type)
+        public async Task<ActionResult> RevokeAccess(Guid repositoryId, string target, RepositoryAccessLevel level)
         {
-            var repository = FindRepository(repositoryId, RepositoryAccessLevel.EDIT, HttpContext.User.Identity);
+            /* Explanation:
+             * There are three considered access levels:
+             *      Author
+             *        Edit-level users
+             *          Other users
+             *  Other users can only revoke their own access
+             *  Each given level can revoke access BELOW their level 
+             *      (Edit-level cannot revoke access of other Edit-level users)
+             *  Author cannot lose access
+             */
+            var source = await _database.Users.FindAsync(HttpContext.User.Identity);
+            if (source == null) return Unauthorized();
+
+            var repository = await FindRepository(repositoryId);
             if (repository == null) return NotFound();
-            throw new NotImplementedException();
+
+            if (target == repository.Author)
+                return BadRequest("Author cannot lose access");
+
+            var targetAccess = await _database.UserRepositoryAccesses.FindAsync(repositoryId, target);
+            if (targetAccess == null || !level.Check(targetAccess)) 
+                return Ok("User already has insufficient access");
+
+            if (!(source.Login == repository.Author || targetAccess.CanEdit)
+                && target != source.Login)
+                return Unauthorized("Without EDIT access only user's own access can be revoked");
+
+            if (source.Login != repository.Author && targetAccess.CanEdit)
+                return Unauthorized("Only Author can revoke EDIT access");
+
+            level.Revoke(targetAccess);
+            await _database.SaveChangesAsync();
+            return Ok();
         }
         #endregion
         //Requests regarding the version tree, and specific versions in particular.
