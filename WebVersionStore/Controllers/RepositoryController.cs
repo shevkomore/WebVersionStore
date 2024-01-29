@@ -10,6 +10,11 @@ namespace WebVersionStore.Controllers
     [Authorize]
     public class RepositoryController : Controller
     {
+        WebVersionControlContext _database;
+        public RepositoryController(WebVersionControlContext database)
+        {
+            _database = database;
+        }
         //Non-specific requests, and non-action methods (private/with NonActionAttribute)
         #region Generic
         [HttpGet]
@@ -17,7 +22,7 @@ namespace WebVersionStore.Controllers
 
         Repository? FindRepository(Guid repositoryId)
         {
-            throw new NotImplementedException();
+            return _database.Repositories.Find(repositoryId);
         }
         Repository? FindRepository(Guid repositoryId, RepositoryAccessLevel level, IIdentity? user)
         {
@@ -33,7 +38,13 @@ namespace WebVersionStore.Controllers
         [HttpGet]
         public ActionResult List()
         {
-            throw new NotImplementedException();
+            if (HttpContext.User.Identity == null)
+                return BadRequest();
+
+            var list = from repo in _database.Repositories
+                       where HttpContext.User.Identity.CanAccess(repo, RepositoryAccessLevel.VIEW) 
+                       select repo;
+            return Json(list.ToList());
         }
 
         [HttpGet("Search")]
@@ -46,14 +57,43 @@ namespace WebVersionStore.Controllers
         [HttpGet]
         public ActionResult ListOwned()
         {
-            throw new NotImplementedException();
+            if (HttpContext.User.Identity == null)
+                return BadRequest();
+
+            var list = from repo in _database.Repositories
+                       where repo.Author == HttpContext.User.Identity.Name
+                       select repo;
+            return Json(list.ToList());
         }
 
         [HttpGet]
         public ActionResult ListAccess(RepositoryAccessSettingsModel accessSettings)
         {
-            //show ones with this or higher access
-            throw new NotImplementedException();
+            if (HttpContext.User.Identity == null)
+                return BadRequest();
+
+            var list = from repo in _database.Repositories
+                       where repo.UserRepositoryAccesses.Any(access =>
+                       /*   Short explanation:
+                        *   - If a field is "marked"(i.e. true) in accessSettings,
+                        *   the corresponding condition is added to our check.
+                        *   - Only the added conditions are tested; otherwise
+                        *   the state is not filtered.
+                        *   - Since the LINQ request condition is converted to SQL,
+                        *   the "normal" algorithm for this throws an error;
+                        *   this is why the whole thing is written in a form of 
+                        *   a boolean operation
+                        */
+                            //          Structure:
+                            // \/   Trigger              \/ Condition
+                             (!accessSettings.IsOwner  | repo.Author == HttpContext.User.Identity.Name)
+                           & (!accessSettings.CanView  | access.CanView)
+                           & (!accessSettings.CanEdit  | access.CanEdit)
+                           & (!accessSettings.CanAdd   | access.CanAdd)
+                           & (!accessSettings.CanRemove| access.CanRemove)
+                           )
+                       select repo;
+            return Json(list.ToList());
         }
         #endregion
         //Requests regarding a specific repository. Generally call FindRepository (in General)

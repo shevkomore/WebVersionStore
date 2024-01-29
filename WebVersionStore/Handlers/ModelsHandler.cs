@@ -16,7 +16,6 @@ namespace WebVersionStore.Handlers
         };
         public static bool Check(this RepositoryAccessLevel required, UserRepositoryAccess to_check) 
             => AccessChecks[required](to_check);
-
         public static bool CanAccess(this IIdentity user, Repository repository, RepositoryAccessLevel requirement)
         {
             return user != null

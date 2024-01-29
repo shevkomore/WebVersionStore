@@ -28,11 +28,12 @@ namespace WebVersionStore.Models
                 CanEdit = true;
                 return;
             }
-            CanView = from.CanView ?? false;
-            CanEdit = from.CanEdit ?? false;
-            CanAdd = from.CanAdd ?? false;
-            CanRemove = from.CanRemove ?? false;
+            CanView = from.CanView;
+            CanEdit = from.CanEdit;
+            CanAdd = from.CanAdd;
+            CanRemove = from.CanRemove;
 
         }
+        public 
     }
 }
