@@ -5,6 +5,7 @@
         VIEW,
         EDIT,
         ADD,
-        REMOVE
+        REMOVE,
+        AUTHOR
     }
 }

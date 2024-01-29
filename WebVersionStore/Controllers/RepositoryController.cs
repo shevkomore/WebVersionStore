@@ -76,7 +76,7 @@ namespace WebVersionStore.Controllers
         [HttpPost]
         public ActionResult Edit(Guid repositoryId, RepositoryDisplaySettingsModel model)
         {
-            var repository = FindRepository(repositoryId);
+            var repository = FindRepository(repositoryId, RepositoryAccessLevel.EDIT, HttpContext.User.Identity);
             if (repository == null) return NotFound();
             throw new NotImplementedException();
         }
@@ -84,19 +84,38 @@ namespace WebVersionStore.Controllers
         [HttpPost]
         public ActionResult GrantAccess(Guid repositoryId, RepositoryAccessLevel type) 
         {
+            var repository = FindRepository(repositoryId, RepositoryAccessLevel.EDIT, HttpContext.User.Identity);
+            if (repository == null) return NotFound();
             throw new NotImplementedException();
         }
 
         [HttpPost]
         public ActionResult RevokeAccess(Guid repositoryId, RepositoryAccessLevel type)
         {
+            var repository = FindRepository(repositoryId, RepositoryAccessLevel.EDIT, HttpContext.User.Identity);
+            if (repository == null) return NotFound();
             throw new NotImplementedException();
         }
-        //TODO Stopped here. This region' actions are probably done.
         #endregion
         //Requests regarding the version tree, and specific versions in particular.
         #region Versions
+        [HttpGet]
+        public ActionResult VersionDetails(Guid repositoryId, Guid versionId)
+        {
+            throw new NotImplementedException();
+        }
 
+        [HttpPost]
+        public ActionResult CreateVersion([FromForm] VersionCreateModel data)
+        {
+            throw new NotImplementedException();
+        }
+
+        [HttpPost]
+        public ActionResult DeleteVersion(Guid repositoryId, Guid versionId)
+        {
+            throw new NotImplementedException();
+        }
         #endregion
     }
 }
