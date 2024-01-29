@@ -1,9 +1,12 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.Drawing;
+using System.Drawing.Imaging;
 using System.Security.Principal;
 using WebVersionStore.Handlers;
 using WebVersionStore.Models;
 using WebVersionStore.Models.Database;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace WebVersionStore.Controllers
 {
@@ -11,9 +14,11 @@ namespace WebVersionStore.Controllers
     public class RepositoryController : Controller
     {
         WebVersionControlContext _database;
-        public RepositoryController(WebVersionControlContext database)
+        IConfiguration _configuration;
+        public RepositoryController(WebVersionControlContext database, IConfiguration config)
         {
             _database = database;
+            _configuration = config;
         }
         //Non-specific requests, and non-action methods (private/with NonActionAttribute)
         #region General
@@ -31,6 +36,24 @@ namespace WebVersionStore.Controllers
             if (repository == null) return null;
             if (!user.CanAccess(repository, level)) return null;
             return repository;
+        }
+        string BuildDataFilePath(Guid repositoryId, string fileName)
+        {
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                repositoryId.ToString(),
+                "Data",
+                fileName
+                );
+        }
+        string BuildImageFilePath(Guid repositoryId, string fileName)
+        {
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                repositoryId.ToString(),
+                "Images",
+                fileName + ".png"
+                );
         }
         #endregion
         //Requests regarding the list of all repositories available to user
@@ -222,21 +245,83 @@ namespace WebVersionStore.Controllers
         //Requests regarding the version tree, and specific versions in particular.
         #region Versions
         [HttpGet]
-        public ActionResult VersionDetails(Guid repositoryId, Guid versionId)
+        public async Task<ActionResult> VersionDetails(Guid repositoryId, Guid versionId)
         {
-            throw new NotImplementedException();
+
+            //var repository = await FindRepository(repositoryId, RepositoryAccessLevel.VIEW, HttpContext.User.Identity);
+            //if (repository == null) return NotFound();
+            if (!_database.UserRepositoryAccesses.Any(access =>
+                    access.RepositoryId == repositoryId
+                    && (access.UserLogin == HttpContext.User.Identity.Name)
+                    && RepositoryAccessLevel.VIEW.Check(access)))
+                return Unauthorized();
+
+            var version = await _database.Versions.FindAsync(versionId);
+            if (version == null || version.RepositoryId != repositoryId) return NotFound();
+
+            //TODO? also send parent and children
+            return Json(new VersionResponceModel(version));
         }
 
         [HttpPost]
-        public ActionResult CreateVersion([FromForm] VersionCreateModel data)
+        public async Task<ActionResult> CreateVersion([FromForm] VersionCreateModel data)
         {
-            throw new NotImplementedException();
+            var repository = await FindRepository(data.Repository, RepositoryAccessLevel.ADD, HttpContext.User.Identity);
+            if (repository == null) return NotFound();
+
+            string? imageLocation = null;
+            if (data.Image != null)
+            {
+                var imageSource = Image.FromStream(data.Image.OpenReadStream());
+                var resizedImage = new Bitmap(imageSource, new Size(300, 200));
+                imageLocation = Guid.NewGuid().ToString();
+                resizedImage.Save(
+                    BuildImageFilePath(data.Repository, imageLocation)
+                    );
+            }
+            var fileLocation = Guid.NewGuid().ToString();
+            using(FileStream file = System.IO.File.Create(
+                BuildImageFilePath(data.Repository, fileLocation)
+                ))
+            {
+                data.Data.CopyTo(file);
+            }
+            var version = data.BuildVersion(imageLocation, fileLocation);
+            //!!!!!THIS MIGHT NOT WORK (might not be sent to database)
+            repository.Versions.Add(version);
+            await _database.SaveChangesAsync();
+            return Ok();
         }
 
         [HttpPost]
-        public ActionResult DeleteVersion(Guid repositoryId, Guid versionId)
+        public async Task<ActionResult> RemoveVersion(Guid repositoryId, Guid versionId)
         {
-            throw new NotImplementedException();
+            var repository = await FindRepository(repositoryId, RepositoryAccessLevel.REMOVE, HttpContext.User.Identity);
+            if (repository == null) return NotFound();
+
+            var version = await _database.Versions.FindAsync(versionId);
+            if (version == null || version.RepositoryId != repositoryId) return NotFound();
+
+            System.IO.File.Delete(BuildDataFilePath(repository.RepositoryId, version.DataLocation));
+            if(version.ImageLocation != null)
+                System.IO.File.Delete(BuildImageFilePath(repository.RepositoryId, version.ImageLocation));
+
+            _database.Versions.Remove(version);
+            await _database.SaveChangesAsync();
+            return Ok();
+        }
+
+        [HttpPost]
+        public async Task<ActionResult> LoadVersion(Guid repositoryId, Guid versionId)
+        {
+            var repository = await FindRepository(repositoryId, RepositoryAccessLevel.REMOVE, HttpContext.User.Identity);
+            if (repository == null) return NotFound();
+
+            var version = await _database.Versions.FindAsync(versionId);
+            if (version == null || version.RepositoryId != repositoryId) return NotFound();
+
+            await Response.SendFileAsync(BuildDataFilePath(repository.RepositoryId, version.DataLocation));
+            return Ok();
         }
         #endregion
     }

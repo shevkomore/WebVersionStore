@@ -12,7 +12,7 @@ namespace WebVersionStore.Models
         public string Color { get; set; }
         public IFormFile Data { get; set; }
         public IFormFile? Image { get; set; }
-        public Version BuildVersion(string imageLocation, string dataLocation)
+        public Version BuildVersion(string? imageLocation, string dataLocation)
         {
             return new Version
             {
