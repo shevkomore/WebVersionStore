@@ -1,4 +1,5 @@
-﻿using System.Security.Principal;
+﻿using System.Linq.Expressions;
+using System.Security.Principal;
 using WebVersionStore.Models;
 using WebVersionStore.Models.Database;
 
@@ -7,7 +8,8 @@ namespace WebVersionStore.Handlers
     public static class ModelsHandler
     {
         #region RepositoryAccessLevel
-        public static Dictionary<RepositoryAccessLevel, Func<UserRepositoryAccess, bool>> AccessChecks = new Dictionary<RepositoryAccessLevel, Func<UserRepositoryAccess, bool>> 
+        /*Cannot be used in LINQ expressions!*/
+        public static Dictionary<RepositoryAccessLevel, Func<UserRepositoryAccess, bool>> AccessChecks = new Dictionary<RepositoryAccessLevel, Func<UserRepositoryAccess, bool>>
         {
             { RepositoryAccessLevel.VIEW, o => o.CanView },
             { RepositoryAccessLevel.ADD, o => o.CanAdd },
@@ -51,7 +53,7 @@ namespace WebVersionStore.Handlers
             }
         }
         #endregion
-        public static bool CanAccess(this IIdentity user, Repository repository, RepositoryAccessLevel requirement)
+        /*public static bool CanAccess(this IIdentity user, Repository repository, RepositoryAccessLevel requirement)
         {
             return user != null
                 && (
@@ -61,6 +63,19 @@ namespace WebVersionStore.Handlers
                     && requirement.Check(access)
                    )
                 );
+        }*/
+        public static bool CanAccess(this IIdentity user, Repository repository, RepositoryAccessLevel requirement)
+        {
+            return user != null
+                && ( repository.Author == user.Name
+                || repository.UserRepositoryAccesses.Any(access => 
+                    access.UserLogin == user.Name
+                  && (!(requirement == RepositoryAccessLevel.VIEW)  || access.CanView)
+                  && (!(requirement == RepositoryAccessLevel.EDIT)  || access.CanEdit)
+                  && (!(requirement == RepositoryAccessLevel.ADD)   || access.CanAdd)
+                  && (!(requirement == RepositoryAccessLevel.REMOVE)|| access.CanRemove)
+                  ));
+                
         }
         public static Repository Apply(this RepositoryDisplaySettingsModel model, Repository repository)
         {

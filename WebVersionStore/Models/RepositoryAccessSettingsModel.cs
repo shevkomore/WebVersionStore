@@ -1,4 +1,5 @@
-﻿using WebVersionStore.Models.Database;
+﻿using System.Security.Principal;
+using WebVersionStore.Models.Database;
 
 namespace WebVersionStore.Models
 {
@@ -34,6 +35,24 @@ namespace WebVersionStore.Models
             CanRemove = from.CanRemove;
 
         }
-        public 
+        public RepositoryAccessSettingsModel(IIdentity user, Repository? from2 = null)
+        {
+            if (from2 != null && from2.Author == user.Name)
+            {
+                //User has created the database, which automatically grants them the maximum access level
+                IsOwner = true;
+                CanAdd = true;
+                CanRemove = true;
+                CanView = true;
+                CanEdit = true;
+                return;
+            }
+            IsOwner = false;
+            CanAdd = false;
+            CanRemove = false;
+            CanView = false;
+            CanEdit = false;
+
+        }
     }
 }

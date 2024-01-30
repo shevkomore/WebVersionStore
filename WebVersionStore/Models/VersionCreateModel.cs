@@ -16,7 +16,9 @@ namespace WebVersionStore.Models
         {
             return new Version
             {
+                VersionId = Guid.NewGuid(),
                 RepositoryId = Repository,
+                Parent = Parent,
                 Name = Name,
                 Description = Description,
                 Color = Color,

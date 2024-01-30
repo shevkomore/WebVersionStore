@@ -8,6 +8,7 @@ using System.Text;
 using WebVersionStore.Models;
 using WebVersionStore.Models.Database;
 using WebVersionStore.Models.Local;
+using WebVersionStore.Services;
 using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace WebVersionStore.Handlers
@@ -19,6 +20,7 @@ namespace WebVersionStore.Handlers
             services.AddDbContext<WebVersionControlContext>(options =>
                 options.UseSqlServer(config.GetConnectionString("WebVersionStoreDatabase")));
 
+            services.AddScoped<IVersionFileStorageService, WindowsVersionFileStorageService>();
 
             return services;
         }

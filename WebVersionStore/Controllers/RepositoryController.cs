@@ -1,12 +1,10 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using System.Drawing;
-using System.Drawing.Imaging;
 using System.Security.Principal;
 using WebVersionStore.Handlers;
 using WebVersionStore.Models;
 using WebVersionStore.Models.Database;
-using static System.Runtime.InteropServices.JavaScript.JSType;
+using WebVersionStore.Services;
 
 namespace WebVersionStore.Controllers
 {
@@ -15,10 +13,12 @@ namespace WebVersionStore.Controllers
     {
         WebVersionControlContext _database;
         IConfiguration _configuration;
-        public RepositoryController(WebVersionControlContext database, IConfiguration config)
+        IVersionFileStorageService _filestorage;
+        public RepositoryController(WebVersionControlContext database, IConfiguration config, IVersionFileStorageService storage)
         {
             _database = database;
             _configuration = config;
+            _filestorage = storage;
         }
         //Non-specific requests, and non-action methods (private/with NonActionAttribute)
         #region General
@@ -34,26 +34,9 @@ namespace WebVersionStore.Controllers
             if (user == null) return null;
             var repository = await FindRepository(repositoryId);
             if (repository == null) return null;
+            _database.Entry(repository).Collection(o => o.UserRepositoryAccesses).Load();
             if (!user.CanAccess(repository, level)) return null;
             return repository;
-        }
-        string BuildDataFilePath(Guid repositoryId, string fileName)
-        {
-            return Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                repositoryId.ToString(),
-                "Data",
-                fileName
-                );
-        }
-        string BuildImageFilePath(Guid repositoryId, string fileName)
-        {
-            return Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                repositoryId.ToString(),
-                "Images",
-                fileName + ".png"
-                );
         }
         #endregion
         //Requests regarding the list of all repositories available to user
@@ -63,11 +46,13 @@ namespace WebVersionStore.Controllers
         {
             if (HttpContext.User.Identity?.Name == null)
                 return BadRequest();
-
             var list = from repo in _database.Repositories
-                       where HttpContext.User.Identity.CanAccess(repo, RepositoryAccessLevel.VIEW) 
+                       where
+                       //HttpContext.User.Identity.CanAccess(repo, RepositoryAccessLevel.VIEW) 
+                       repo.Author == HttpContext.User.Identity.Name
+                       || repo.UserRepositoryAccesses.Any(access =>access.CanView)
                        select repo;
-            return Json(list.ToList());
+            return Json(list.ToList().ConvertAll(o => new RepositoryListResponceItemModel(o)));
         }
 
         [HttpGet("Search")]
@@ -75,18 +60,6 @@ namespace WebVersionStore.Controllers
         {
             //Unnecessary; might delete later
             throw new NotImplementedException();
-        }
-
-        [HttpGet]
-        public ActionResult ListOwned()
-        {
-            if (HttpContext.User.Identity?.Name == null)
-                return BadRequest();
-
-            var list = from repo in _database.Repositories
-                       where repo.Author == HttpContext.User.Identity.Name
-                       select repo;
-            return Json(list.ToList());
         }
 
         [HttpGet]
@@ -128,8 +101,13 @@ namespace WebVersionStore.Controllers
             if (repository == null) return NotFound();
             //The version tree is also sent here
             //TODO? prepare tree data here for simpler visualization (sort by heredity, maybe construct the tree etc.)
-            var tree = repository.Versions.ToList();
-            return Json(new {info = repository, tree = tree });
+            var tree = (from ver in _database.Versions 
+                        where ver.RepositoryId == repositoryId 
+                        select new VersionResponceModel(ver, _filestorage))
+                        .ToList();
+            var access = await _database.UserRepositoryAccesses.FindAsync(HttpContext.User.Identity.Name, repositoryId);
+            if (access == null) return Json(new RepositoryResponceModel(repository, tree, new RepositoryAccessSettingsModel(HttpContext.User.Identity, repository)));
+            return Json(new RepositoryResponceModel(repository, tree, new RepositoryAccessSettingsModel(access, repository)));
         }
 
         [HttpPost]
@@ -137,11 +115,12 @@ namespace WebVersionStore.Controllers
         {
             if (HttpContext.User.Identity?.Name == null)
                 return BadRequest();
-            if (_database.Users.Find(HttpContext.User.Identity) == null)
+            if (_database.Users.Find(HttpContext.User.Identity.Name) == null)
                 return NotFound("User not found");
 
             _database.Repositories.Add(new Repository
             {
+                RepositoryId = Guid.NewGuid(),
                 Author = HttpContext.User.Identity.Name!,
                 Name = model.Name,
                 Description = model.Description,
@@ -189,17 +168,22 @@ namespace WebVersionStore.Controllers
                 return Ok("Author does not require access level assignment");
             if (level == RepositoryAccessLevel.EDIT)
             {
-                var source = await _database.Users.FindAsync(HttpContext.User.Identity);
+                var source = await _database.Users.FindAsync(HttpContext.User.Identity.Name);
                 if (source == null || repository.Author != source.Login)
                     return Unauthorized("At least Author access level is required to grant EDIT access");
             }
-            var targetAccess = await _database.UserRepositoryAccesses.FindAsync(repositoryId, target);
-            if (targetAccess == null) targetAccess = new UserRepositoryAccess{
+            var targetAccess = await _database.UserRepositoryAccesses.FindAsync(target, repositoryId);
+            if (targetAccess == null)
+            {
+                targetAccess = new UserRepositoryAccess
+                {
                     RepositoryId = repositoryId,
                     UserLogin = target
                 };
+                level.Grant(targetAccess);
+                _database.UserRepositoryAccesses.Add(targetAccess);
+            }
             level.Grant(targetAccess);
-            _database.UserRepositoryAccesses.Add(targetAccess);
             await _database.SaveChangesAsync();
             return Ok();
         }
@@ -248,19 +232,14 @@ namespace WebVersionStore.Controllers
         public async Task<ActionResult> VersionDetails(Guid repositoryId, Guid versionId)
         {
 
-            //var repository = await FindRepository(repositoryId, RepositoryAccessLevel.VIEW, HttpContext.User.Identity);
-            //if (repository == null) return NotFound();
-            if (!_database.UserRepositoryAccesses.Any(access =>
-                    access.RepositoryId == repositoryId
-                    && (access.UserLogin == HttpContext.User.Identity.Name)
-                    && RepositoryAccessLevel.VIEW.Check(access)))
-                return Unauthorized();
+            var repository = await FindRepository(repositoryId, RepositoryAccessLevel.VIEW, HttpContext.User.Identity);
+            if (repository == null) return NotFound();
 
             var version = await _database.Versions.FindAsync(versionId);
             if (version == null || version.RepositoryId != repositoryId) return NotFound();
 
             //TODO? also send parent and children
-            return Json(new VersionResponceModel(version));
+            return Json(new VersionResponceModel(version, _filestorage));
         }
 
         [HttpPost]
@@ -268,27 +247,47 @@ namespace WebVersionStore.Controllers
         {
             var repository = await FindRepository(data.Repository, RepositoryAccessLevel.ADD, HttpContext.User.Identity);
             if (repository == null) return NotFound();
+            var versionsLoading = _database.Entry(repository).Collection("Versions").LoadAsync();
 
             string? imageLocation = null;
             if (data.Image != null)
-            {
-                var imageSource = Image.FromStream(data.Image.OpenReadStream());
-                var resizedImage = new Bitmap(imageSource, new Size(300, 200));
-                imageLocation = Guid.NewGuid().ToString();
-                resizedImage.Save(
-                    BuildImageFilePath(data.Repository, imageLocation)
-                    );
-            }
-            var fileLocation = Guid.NewGuid().ToString();
-            using(FileStream file = System.IO.File.Create(
-                BuildImageFilePath(data.Repository, fileLocation)
-                ))
-            {
-                data.Data.CopyTo(file);
-            }
+                imageLocation = _filestorage.StoreImage(repository.RepositoryId, data.Image);
+            string fileLocation = _filestorage.StoreData(repository.RepositoryId, data.Data);
+
+            await versionsLoading;
+            if (data.Parent != null)
+            //All versions must refer to each other (i.e. be part of the same tree)
+                {if (!repository.Versions.Any(ver => ver.VersionId == data.Parent))
+                    return NotFound("Parent node missing");}
+            else
+                //except when it's the first node - then it's the root of the tree
+                if (repository.Versions.Any())
+                    return BadRequest("There are already nodes in the tree - creating a root node is prohibited");
+
             var version = data.BuildVersion(imageLocation, fileLocation);
             //!!!!!THIS MIGHT NOT WORK (might not be sent to database)
             repository.Versions.Add(version);
+            await _database.SaveChangesAsync();
+            return Ok();
+        }
+
+        [HttpPost]
+        public async Task<ActionResult> EditVersion([FromForm] VersionEditModel data)
+        {
+            var version = await _database.Versions.FindAsync(data.VersionId);
+            if (version == null || version.RepositoryId != data.RepositoryId) return NotFound();
+
+            _database.Entry(version).Reference(o => o.Repository).Load();
+            if (version.Repository.Author != HttpContext.User.Identity.Name)
+            {
+                var access = await _database.UserRepositoryAccesses.FindAsync(HttpContext.User.Identity.Name, data.RepositoryId);
+                if (access == null
+                    || (!access.CanEdit
+                        && !(access.CanAdd && access.CanRemove)))
+                    return Unauthorized("User needs either EDIT or ADD+REMOVE access to edit versions");
+            }
+
+            data.Update(version, _filestorage);
             await _database.SaveChangesAsync();
             return Ok();
         }
@@ -302,9 +301,9 @@ namespace WebVersionStore.Controllers
             var version = await _database.Versions.FindAsync(versionId);
             if (version == null || version.RepositoryId != repositoryId) return NotFound();
 
-            System.IO.File.Delete(BuildDataFilePath(repository.RepositoryId, version.DataLocation));
+            _filestorage.DeleteData(repositoryId, version.DataLocation);
             if(version.ImageLocation != null)
-                System.IO.File.Delete(BuildImageFilePath(repository.RepositoryId, version.ImageLocation));
+                _filestorage.DeleteImage(repositoryId, version.ImageLocation);
 
             _database.Versions.Remove(version);
             await _database.SaveChangesAsync();
@@ -320,7 +319,7 @@ namespace WebVersionStore.Controllers
             var version = await _database.Versions.FindAsync(versionId);
             if (version == null || version.RepositoryId != repositoryId) return NotFound();
 
-            await Response.SendFileAsync(BuildDataFilePath(repository.RepositoryId, version.DataLocation));
+            await Response.SendFileAsync(_filestorage.GetDataPath(repositoryId, version.DataLocation));
             return Ok();
         }
         #endregion
