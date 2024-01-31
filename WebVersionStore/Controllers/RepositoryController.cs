@@ -5,6 +5,7 @@ using WebVersionStore.Handlers;
 using WebVersionStore.Models;
 using WebVersionStore.Models.Database;
 using WebVersionStore.Services;
+using Version = WebVersionStore.Models.Database.Version;
 
 namespace WebVersionStore.Controllers
 {
@@ -31,12 +32,23 @@ namespace WebVersionStore.Controllers
         }
         async Task<Repository?> FindRepository(Guid repositoryId, RepositoryAccessLevel level, IIdentity? user)
         {
-            if (user == null) return null;
+            if (user == null || user.Name == null) return null;
+            if (!user.CanAccess(repositoryId, _database, level)) return null;
             var repository = await FindRepository(repositoryId);
             if (repository == null) return null;
-            _database.Entry(repository).Collection(o => o.UserRepositoryAccesses).Load();
-            if (!user.CanAccess(repository, level)) return null;
             return repository;
+        }
+        ValueTask<Version?> FindVersion(Guid versionId)
+        {
+            return _database.Versions.FindAsync(versionId);
+        }
+        async Task<Version?> FindVersion(Guid versionId, RepositoryAccessLevel level, IIdentity? user)
+        {
+            if (user == null || user.Name == null) return null;
+            var version = await FindVersion(versionId);
+            if(version == null) return null;
+            if (!user.CanAccess(version.RepositoryId, _database, level)) return null;
+            return version;
         }
         #endregion
         //Requests regarding the list of all repositories available to user
@@ -69,7 +81,9 @@ namespace WebVersionStore.Controllers
                 return BadRequest();
 
             var list = from repo in _database.Repositories
-                       where repo.UserRepositoryAccesses.Any(access =>
+                       join level in _database.UserAccessLevels(HttpContext.User.Identity?.Name)
+                       on repo.RepositoryId equals level.RepositoryId
+                       where
                        /*   Short explanation:
                         *   - If a field is "marked"(i.e. true) in accessSettings,
                         *   the corresponding condition is added to our check.
@@ -81,13 +95,12 @@ namespace WebVersionStore.Controllers
                         *   a boolean operation
                         */
                             //          Structure:
-                            // \/   Trigger              \/ Condition
-                             (!accessSettings.IsOwner  | repo.Author == HttpContext.User.Identity.Name)
-                           & (!accessSettings.CanView  | access.CanView)
-                           & (!accessSettings.CanEdit  | access.CanEdit)
-                           & (!accessSettings.CanAdd   | access.CanAdd)
-                           & (!accessSettings.CanRemove| access.CanRemove)
-                           )
+                            // \/   Trigger                  \/ Condition
+                             (!accessSettings.IsAuthor || (level.IsAuthor ?? false))
+                           & (!accessSettings.CanView  || (level.CanView ?? false))
+                           & (!accessSettings.CanEdit  || (level.CanEdit ?? false))
+                           & (!accessSettings.CanAdd   || (level.CanAdd ?? false))
+                           & (!accessSettings.CanRemove|| (level.CanRemove ?? false))
                        select repo;
             return Json(list.ToList());
         }
@@ -159,31 +172,20 @@ namespace WebVersionStore.Controllers
              *  User cannot grant access to themselves 
              *      (it's generally unnecessary; it's checked here just in case something else made a mistake)
              */
-            var repository = await FindRepository(repositoryId, RepositoryAccessLevel.EDIT, HttpContext.User.Identity);
-            if (repository == null) return NotFound();
-
             if (target == HttpContext.User.Identity?.Name)
                 return BadRequest("User cannot grant access to themselves");
-            if (target == repository.Author)
+
+            var accessLevel = _database.UserAccessLevel(HttpContext.User.Identity.Name, repositoryId).FirstOrDefault();
+            if (accessLevel == null) return NotFound();
+
+            if (accessLevel.IsAuthor??false)
                 return Ok("Author does not require access level assignment");
-            if (level == RepositoryAccessLevel.EDIT)
-            {
-                var source = await _database.Users.FindAsync(HttpContext.User.Identity.Name);
-                if (source == null || repository.Author != source.Login)
-                    return Unauthorized("At least Author access level is required to grant EDIT access");
-            }
-            var targetAccess = await _database.UserRepositoryAccesses.FindAsync(target, repositoryId);
-            if (targetAccess == null)
-            {
-                targetAccess = new UserRepositoryAccess
-                {
-                    RepositoryId = repositoryId,
-                    UserLogin = target
-                };
-                level.Grant(targetAccess);
-                _database.UserRepositoryAccesses.Add(targetAccess);
-            }
-            level.Grant(targetAccess);
+
+            if (level == RepositoryAccessLevel.EDIT && !(accessLevel.IsAuthor??false))
+                return Unauthorized("At least Author access level is required to grant EDIT access");
+
+
+            level.Grant(target, repositoryId, _database);
             await _database.SaveChangesAsync();
             return Ok();
         }
@@ -207,21 +209,21 @@ namespace WebVersionStore.Controllers
             var repository = await FindRepository(repositoryId);
             if (repository == null) return NotFound();
 
-            if (target == repository.Author)
-                return BadRequest("Author cannot lose access");
-
-            var targetAccess = await _database.UserRepositoryAccesses.FindAsync(repositoryId, target);
+            var targetAccess = _database.UserAccessLevel(HttpContext.User.Identity.Name, repositoryId).FirstOrDefault();
             if (targetAccess == null || !level.Check(targetAccess)) 
                 return Ok("User already has insufficient access");
+            if (target == repository.Author || level == RepositoryAccessLevel.AUTHOR)
+                return BadRequest("Author cannot lose access");
 
-            if (!(source.Login == repository.Author || targetAccess.CanEdit)
-                && target != source.Login)
-                return Unauthorized("Without EDIT access only user's own access can be revoked");
-
-            if (source.Login != repository.Author && targetAccess.CanEdit)
-                return Unauthorized("Only Author can revoke EDIT access");
-
-            level.Revoke(targetAccess);
+            if(target != source.Login)
+            {
+                if (!targetAccess.CanEdit ?? false)
+                    return Unauthorized("Without EDIT access only user's own access can be revoked");
+                if (level == RepositoryAccessLevel.EDIT || level == RepositoryAccessLevel.VIEW && !(targetAccess.IsAuthor ?? false))
+                    return Unauthorized("Only Author can revoke EDIT access");
+            }
+            
+            level.Revoke(target, repositoryId, _database);
             await _database.SaveChangesAsync();
             return Ok();
         }
@@ -231,12 +233,11 @@ namespace WebVersionStore.Controllers
         [HttpGet]
         public async Task<ActionResult> VersionDetails(Guid repositoryId, Guid versionId)
         {
+            var version = await FindVersion(versionId, RepositoryAccessLevel.VIEW, HttpContext.User.Identity);
+            if (version == null) return NotFound();
 
-            var repository = await FindRepository(repositoryId, RepositoryAccessLevel.VIEW, HttpContext.User.Identity);
-            if (repository == null) return NotFound();
-
-            var version = await _database.Versions.FindAsync(versionId);
-            if (version == null || version.RepositoryId != repositoryId) return NotFound();
+            if (repositoryId != version.RepositoryId)
+                return BadRequest("Accessed version does not belong to specified repository");
 
             //TODO? also send parent and children
             return Json(new VersionResponceModel(version, _filestorage));
@@ -274,16 +275,23 @@ namespace WebVersionStore.Controllers
         [HttpPost]
         public async Task<ActionResult> EditVersion([FromForm] VersionEditModel data)
         {
-            var version = await _database.Versions.FindAsync(data.VersionId);
-            if (version == null || version.RepositoryId != data.RepositoryId) return NotFound();
+            var version = await FindVersion(data.VersionId, RepositoryAccessLevel.EDIT, HttpContext.User.Identity);
+            if(version == null) return NotFound();
+
+            if (data.RepositoryId != version.RepositoryId)
+                return BadRequest("Accessed version does not belong to specified repository");
 
             _database.Entry(version).Reference(o => o.Repository).Load();
             if (version.Repository.Author != HttpContext.User.Identity.Name)
             {
-                var access = await _database.UserRepositoryAccesses.FindAsync(HttpContext.User.Identity.Name, data.RepositoryId);
+                var access = _database.UserAccessLevel(HttpContext.User.Identity.Name, data.RepositoryId).FirstOrDefault(new UserAccessLevelResult
+                {
+                    UserId = HttpContext.User.Identity.Name,
+                    RepositoryId = data.RepositoryId
+                });
                 if (access == null
-                    || (!access.CanEdit
-                        && !(access.CanAdd && access.CanRemove)))
+                    || (!(access.CanEdit??false)
+                        && !((access.CanAdd??false) && (access.CanRemove??false))))
                     return Unauthorized("User needs either EDIT or ADD+REMOVE access to edit versions");
             }
 
@@ -295,11 +303,11 @@ namespace WebVersionStore.Controllers
         [HttpPost]
         public async Task<ActionResult> RemoveVersion(Guid repositoryId, Guid versionId)
         {
-            var repository = await FindRepository(repositoryId, RepositoryAccessLevel.REMOVE, HttpContext.User.Identity);
-            if (repository == null) return NotFound();
+            var version = await FindVersion(versionId, RepositoryAccessLevel.REMOVE, HttpContext.User.Identity);
+            if (version == null) return NotFound();
 
-            var version = await _database.Versions.FindAsync(versionId);
-            if (version == null || version.RepositoryId != repositoryId) return NotFound();
+            if (repositoryId != version.RepositoryId)
+                return BadRequest("Accessed version does not belong to specified repository");
 
             _filestorage.DeleteData(repositoryId, version.DataLocation);
             if(version.ImageLocation != null)
@@ -313,11 +321,11 @@ namespace WebVersionStore.Controllers
         [HttpPost]
         public async Task<ActionResult> LoadVersion(Guid repositoryId, Guid versionId)
         {
-            var repository = await FindRepository(repositoryId, RepositoryAccessLevel.REMOVE, HttpContext.User.Identity);
-            if (repository == null) return NotFound();
+            var version = await FindVersion(versionId, RepositoryAccessLevel.VIEW, HttpContext.User.Identity);
+            if (version == null) return NotFound();
 
-            var version = await _database.Versions.FindAsync(versionId);
-            if (version == null || version.RepositoryId != repositoryId) return NotFound();
+            if (repositoryId != version.RepositoryId)
+                return BadRequest("Accessed version does not belong to specified repository");
 
             await Response.SendFileAsync(_filestorage.GetDataPath(repositoryId, version.DataLocation));
             return Ok();

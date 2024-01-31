@@ -13,7 +13,7 @@ namespace WebVersionStore.Models
 
         public bool CanRemove { get; set; }
 
-        public bool IsOwner { get; set; }
+        public bool IsAuthor { get; set; }
 
         public RepositoryAccessSettingsModel() { }
 
@@ -22,7 +22,7 @@ namespace WebVersionStore.Models
             if(from2 != null && from2.Author == from.UserLogin) 
             {
                 //User has created the database, which automatically grants them the maximum access level
-                IsOwner = true;
+                IsAuthor = true;
                 CanAdd = true;
                 CanRemove = true;
                 CanView = true;
@@ -40,14 +40,14 @@ namespace WebVersionStore.Models
             if (from2 != null && from2.Author == user.Name)
             {
                 //User has created the database, which automatically grants them the maximum access level
-                IsOwner = true;
+                IsAuthor = true;
                 CanAdd = true;
                 CanRemove = true;
                 CanView = true;
                 CanEdit = true;
                 return;
             }
-            IsOwner = false;
+            IsAuthor = false;
             CanAdd = false;
             CanRemove = false;
             CanView = false;

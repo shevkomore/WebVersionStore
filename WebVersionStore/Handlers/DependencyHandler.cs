@@ -17,8 +17,8 @@ namespace WebVersionStore.Handlers
     {
         public static IServiceCollection AddDefaultDependencies(this IServiceCollection services, ConfigurationManager config)
         {
-            services.AddDbContext<WebVersionControlContext>(options =>
-                options.UseSqlServer(config.GetConnectionString("WebVersionStoreDatabase")));
+            services.AddDbContext<WebVersionControlContext>(
+                options => options.UseSqlServer(config.GetConnectionString("WebVersionStoreDatabase")));
 
             services.AddScoped<IVersionFileStorageService, WindowsVersionFileStorageService>();
 
